@@ -9,8 +9,16 @@ import landVertexShader from './landVertexShader.glsl';
 import landFragmentShader from './landFragmentShader.glsl';
 import animatedSkyboxVert from './animatedSkyboxVert.glsl';
 import animatedSkyboxFrag from './animatedSkyboxFrag.glsl';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
+import { Vector3, Vector2 } from 'three';
 
-let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, mainSkybox, landSphere, landMaterial;
+let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass;
+let previousCameraPosition = new Vector3();
+let previousCameraRotation = new Vector3();
+let frameCount = 0;
 
 export function init() {
     scene = new THREE.Scene();
@@ -90,14 +98,116 @@ export function init() {
     mainSkybox = new THREE.Mesh(mainSkyboxGeometry, mainSkyboxMaterial);
     scene.add(mainSkybox);
 
-    // Add ambient light
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0);
+    // Create a visible sun in the skybox
+    const sunGeometry = new THREE.SphereGeometry(0.05, 32, 32);
+    // Replace the sun material creation with this:
+    const sunMaterial = new THREE.MeshStandardMaterial({
+        color: 0xffff00,
+        emissive: 0xffff00,
+        emissiveIntensity: 1,
+        toneMapped: false // This ensures the sun always appears bright
+    });
+
+    const sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
+    sunMesh.position.set(50, 30, -50);
+    mainSkybox.add(sunMesh);
+
+    // Add a point light to simulate sun's light
+    const sunLight = new THREE.PointLight(0xffffff, 2.0, 0, 1);
+    sunLight.position.copy(sunMesh.position);
+    scene.add(sunLight);
+
+    // Add a subtle glow effect to the sun
+    const sunGlowGeometry = new THREE.SphereGeometry(5.5, 32, 32);
+    const sunGlowMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            c: { type: "f", value: 0.1 },
+            p: { type: "f", value: 1.4 },
+            glowColor: { type: "c", value: new THREE.Color(0xffff00) },
+            viewVector: { type: "v3", value: camera.position }
+        },
+        vertexShader: `
+            uniform vec3 viewVector;
+            varying float intensity;
+            void main() {
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+                vec3 actual_normal = vec3(modelMatrix * vec4(normal, 0.0));
+                intensity = pow( dot(normalize(viewVector), actual_normal), 6.0 );
+            }
+        `,
+        fragmentShader: `
+            uniform vec3 glowColor;
+            varying float intensity;
+            void main() {
+                vec3 glow = glowColor * intensity;
+                gl_FragColor = vec4( glow, 1.0 );
+            }
+        `,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+        transparent: true
+    });
+
+    const sunGlow = new THREE.Mesh(sunGlowGeometry, sunGlowMaterial);
+    sunGlow.position.copy(sunMesh.position);
+    scene.add(sunGlow);
+
+    // Add subtle ambient light to simulate sky illumination
+    const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
     scene.add(ambientLight);
 
-    // Add directional light
-    const pointLight = new THREE.PointLight(0xffffff, 1.0);
-    pointLight.position.set(10, 10, 10);
-    scene.add(pointLight);
+    // Set up postprocessing
+    composer = new EffectComposer(renderer);
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    bloomPass = new UnrealBloomPass(new Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
+    bloomPass.threshold = 0.21;
+    bloomPass.strength = 1.2;
+    bloomPass.radius = 0.55;
+    composer.addPass(bloomPass);
+
+    const motionBlurShader = {
+        uniforms: {
+            "tDiffuse": { value: null },
+            "velocityFactor": { value: 0.5 },
+            "delta": { value: new Vector2() }
+        },
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D tDiffuse;
+            uniform float velocityFactor;
+            uniform vec2 delta;
+            varying vec2 vUv;
+            void main() {
+                vec4 currentColor = texture2D(tDiffuse, vUv);
+                vec4 blurredColor = vec4(0.0);
+                float totalWeight = 0.0;
+                const int samples = 5;
+                for (int i = 0; i < samples; i++) {
+                    float weight = float(samples - i) / float(samples);
+                    vec2 offset = delta * velocityFactor * (float(i) / float(samples - 1) - 0.5) * 5;
+                    blurredColor += texture2D(tDiffuse, vUv + offset) * weight;
+                    totalWeight += weight;
+                }
+                gl_FragColor = mix(currentColor, blurredColor / totalWeight, 0.5);
+            }
+        `
+    };
+
+    motionBlurPass = new ShaderPass(motionBlurShader);
+    motionBlurPass.renderToScreen = true;
+    composer.addPass(motionBlurPass);
+
+    // Initialize previous positions
+    previousCameraPosition.copy(camera.position);
+    previousCameraRotation.setFromEuler(camera.rotation);
 
     setupGUI(landMaterial);
 
@@ -141,6 +251,9 @@ function createWaterMaterial(landElevationTexture) {
             u_landElevationTexture: { value: landElevationTexture },
             u_waterTransparency: { value: 0.8 },
             u_waterEdgeSharpness: { value: 0.01 },
+            prevModelViewMatrix: { value: new THREE.Matrix4() },
+            prevProjectionMatrix: { value: new THREE.Matrix4() },
+            prevCameraPosition: { value: new THREE.Vector3() }
         },
         vertexShader: snoiseShader + '\n' + waterVertexShader,
         fragmentShader: waterFragmentShader,
@@ -164,7 +277,10 @@ function createLandMaterial() {
             u_quantizationStrength: { value: 0.3 },
             u_time: { value: 0 },
             u_minElevation: { value: 0.0 },
-            u_maxElevation: { value: 1.0 }
+            u_maxElevation: { value: 1.0 },
+            prevModelViewMatrix: { value: new THREE.Matrix4() },
+            prevProjectionMatrix: { value: new THREE.Matrix4() },
+            prevCameraPosition: { value: new THREE.Vector3() }
         },
         vertexShader: landVertexShader,
         fragmentShader: landFragmentShader,
@@ -390,7 +506,6 @@ function setupGUI(landMaterial) {
     waterFolder.add(params, 'cloudScale', 0.1, 10).onChange(updateCloudUniforms);
     waterFolder.add(params, 'cloudSpeed', 0, 1).onChange(updateCloudUniforms);
     waterFolder.add(params, 'envMapIntensity', 0, 5).onChange(updateUniforms);
-    waterFolder.add(params, 'motionBlurStrength', 0, 1).onChange(updateUniforms);
     waterFolder.add(params, 'waterTransparency', 0, 1).onChange(updateUniforms);
     waterFolder.add(params, 'waterEdgeSharpness', 0, 0.1).onChange(updateUniforms);
 
@@ -414,7 +529,6 @@ function setupGUI(landMaterial) {
         waterMaterial.uniforms.u_useRefraction.value = params.useRefraction;
         waterMaterial.uniforms.u_useReflection.value = params.useReflection;
         waterMaterial.uniforms.u_envMapIntensity.value = params.envMapIntensity;
-        waterMaterial.uniforms.u_motionBlurStrength.value = params.motionBlurStrength;
         waterMaterial.uniforms.u_waterTransparency.value = params.waterTransparency;
         waterMaterial.uniforms.u_waterEdgeSharpness.value = params.waterEdgeSharpness;
     }
@@ -430,6 +544,36 @@ function setupGUI(landMaterial) {
     // Initialize uniforms with default values
     updateUniforms();
     updateCloudUniforms();
+
+    const postprocessingFolder = gui.addFolder('Postprocessing');
+    const postprocessingParams = {
+        bloomEnabled: true,
+        bloomThreshold: 0.21,
+        bloomStrength: 1.2,
+        bloomRadius: 0.55,
+        motionBlurEnabled: true,
+        motionBlurStrength: 0.1
+    };
+
+    postprocessingFolder.add(postprocessingParams, 'bloomEnabled').onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'bloomThreshold', 0, 1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'bloomStrength', 0, 3).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'bloomRadius', 0, 1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'motionBlurEnabled').onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'motionBlurStrength', 0, 1)
+        .name('Motion Blur Strength')
+        .onChange((value) => {
+            motionBlurPass.uniforms.velocityFactor.value = value;
+        });
+
+    function updatePostprocessing() {
+        bloomPass.enabled = postprocessingParams.bloomEnabled;
+        bloomPass.threshold = postprocessingParams.bloomThreshold;
+        bloomPass.strength = postprocessingParams.bloomStrength;
+        bloomPass.radius = postprocessingParams.bloomRadius;
+        
+        motionBlurPass.enabled = postprocessingParams.motionBlurEnabled;
+    }
 }
 
 function onWindowResize() {
@@ -437,9 +581,8 @@ function onWindowResize() {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     waterMaterial.uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
 }
-
-let previousModelViewMatrix = new THREE.Matrix4();
 
 export function animate(time) {
     requestAnimationFrame(animate);
@@ -486,16 +629,28 @@ export function animate(time) {
         controls.update();
     }
 
-    // Implement motion blur
-    if (waterSphere && waterMaterial) {
-        const currentModelViewMatrix = waterSphere.modelViewMatrix.clone();
-        const motionBlurStrength = waterMaterial.uniforms.u_motionBlurStrength.value;
+    // Calculate camera movement
+    const currentPosition = camera.position.clone();
+    const currentRotation = new Vector3().setFromEuler(camera.rotation);
 
-        waterMaterial.uniforms.previousModelViewMatrix = { value: previousModelViewMatrix };
-        waterMaterial.uniforms.currentModelViewMatrix = { value: currentModelViewMatrix };
+    const positionDelta = currentPosition.sub(previousCameraPosition);
+    const rotationDelta = currentRotation.sub(previousCameraRotation);
 
-        previousModelViewMatrix.copy(currentModelViewMatrix);
-    }
+    // Calculate 2D screen-space motion vector
+    const motionVector = new Vector2(
+        positionDelta.x + rotationDelta.y,
+        positionDelta.y + rotationDelta.x
+    );
+
+    // Clamp the motion vector to prevent extreme blurring
+    motionVector.clampLength(0, 0.05);
+
+    // Update motion blur uniforms
+    motionBlurPass.uniforms.delta.value.copy(motionVector);
+
+    // Store current camera state for next frame
+    previousCameraPosition.copy(camera.position);
+    previousCameraRotation.setFromEuler(camera.rotation);
 
     // Slowly rotate the skybox
     if (mainSkybox) {
@@ -504,6 +659,13 @@ export function animate(time) {
 
     // Render main scene
     if (renderer && scene && camera) {
+        composer.render();
+    }
+
+    // Reset render target and clear artifacts
+    if (frameCount % 300 === 0) {  // Every 300 frames
+        renderer.setRenderTarget(null);
+        renderer.clear();
         renderer.render(scene, camera);
     }
 }
