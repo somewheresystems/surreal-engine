@@ -153,35 +153,22 @@ function createWaterMaterial(landElevationTexture) {
 function createLandMaterial() {
     return new THREE.ShaderMaterial({
         uniforms: {
-            u_lowColor: { value: new THREE.Color(0x1a4d2e) },
-            u_midColor: { value: new THREE.Color(0x4a7c59) },
-            u_highColor: { value: new THREE.Color(0x9ef01a) },
+            u_lowColor: { value: new THREE.Color(0x1a4d2e).multiplyScalar(1/255) },
+            u_midColor: { value: new THREE.Color(0x4a7c59).multiplyScalar(1/255) },
+            u_highColor: { value: new THREE.Color(0x9ef01a).multiplyScalar(1/255) },
             u_noiseScale: { value: 1.0 },
             u_noiseStrength: { value: 0.1 },
             u_roughness: { value: 0.7 },
             u_metalness: { value: 0.1 },
             u_elevationLevels: { value: 10.0 },
             u_quantizationStrength: { value: 0.3 },
-            u_time: { value: 0 }
+            u_time: { value: 0 },
+            u_minElevation: { value: 0.0 },
+            u_maxElevation: { value: 1.0 }
         },
         vertexShader: landVertexShader,
         fragmentShader: landFragmentShader,
     });
-}
-
-function createNoiseTexture() {
-    const size = 256;
-    const data = new Uint8Array(size * size * 4);
-    for (let i = 0; i < size * size * 4; i += 4) {
-        const noise = Math.random() * 255;
-        data[i] = noise;
-        data[i + 1] = noise;
-        data[i + 2] = noise;
-        data[i + 3] = 255;
-    }
-    const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
-    texture.needsUpdate = true;
-    return texture;
 }
 
 function createCloudTexture(size = 512) {
@@ -310,9 +297,41 @@ function setupGUI(landMaterial) {
     const gui = new dat.GUI();
     
     const landFolder = gui.addFolder('Land');
-    landFolder.addColor(landMaterial.uniforms.u_lowColor, 'value').name('Low Altitude Color');
-    landFolder.addColor(landMaterial.uniforms.u_midColor, 'value').name('Mid Altitude Color');
-    landFolder.addColor(landMaterial.uniforms.u_highColor, 'value').name('High Altitude Color');
+    
+    // Helper function to convert hex to RGB (0-1 range)
+    const hexToRGB = (hex) => {
+        const r = parseInt(hex.slice(1, 3), 16) / 255;
+        const g = parseInt(hex.slice(3, 5), 16) / 255;
+        const b = parseInt(hex.slice(5, 7), 16) / 255;
+        return new THREE.Color(r, g, b);
+    };
+
+    // Helper function to convert RGB (0-1 range) to hex
+    const rgbToHex = (color) => {
+        return '#' + color.getHexString();
+    };
+
+    // Low Altitude Color
+    landFolder.addColor({ color: rgbToHex(landMaterial.uniforms.u_lowColor.value) }, 'color')
+        .name('Low Altitude')
+        .onChange(value => {
+            landMaterial.uniforms.u_lowColor.value = hexToRGB(value);
+        });
+
+    // Mid Altitude Color
+    landFolder.addColor({ color: rgbToHex(landMaterial.uniforms.u_midColor.value) }, 'color')
+        .name('Mid Altitude')
+        .onChange(value => {
+            landMaterial.uniforms.u_midColor.value = hexToRGB(value);
+        });
+
+    // High Altitude Color
+    landFolder.addColor({ color: rgbToHex(landMaterial.uniforms.u_highColor.value) }, 'color')
+        .name('High Altitude')
+        .onChange(value => {
+            landMaterial.uniforms.u_highColor.value = hexToRGB(value);
+        });
+
     landFolder.add(landMaterial.uniforms.u_noiseScale, 'value', 0.1, 5).name('Noise Scale');
     landFolder.add(landMaterial.uniforms.u_noiseStrength, 'value', 0, 0.5).name('Noise Strength');
     landFolder.add(landMaterial.uniforms.u_elevationLevels, 'value', 1, 50).step(1).name('Elevation Levels');
