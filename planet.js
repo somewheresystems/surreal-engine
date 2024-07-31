@@ -15,7 +15,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Vector3, Vector2 } from 'three';
 
-let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass, adjustmentPass;
+let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, envCamera, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass, adjustmentPass, customBloomPass;
 let previousCameraPosition = new Vector3();
 let previousCameraRotation = new Vector3();
 let frameCount = 0;
@@ -74,7 +74,7 @@ export function init() {
 
     // Set up environment map scene and camera
     envScene = new THREE.Scene();
-    const envCamera = new THREE.CubeCamera(0.1, 10, envMap);
+    envCamera = new THREE.CubeCamera(0.1, 1000, envMap);
     envScene.add(envCamera);
 
     // Add a sphere to the environment scene using the HDR noise texture
@@ -98,31 +98,30 @@ export function init() {
     scene.add(mainSkybox);
 
     // Create a visible sun in the skybox
-    const sunGeometry = new THREE.SphereGeometry(0.05, 32, 32);
-    // Replace the sun material creation with this:
-    const sunMaterial = new THREE.MeshStandardMaterial({
-        color: 0xffff00,
-        emissive: 0xffff00,
+    const sunGeometry = new THREE.SphereGeometry(5, 64, 64); // Reduced size for better proportion
+    const sunMaterial = new THREE.MeshBasicMaterial({
+        color: 0xffffff,
+        emissive: 0xffffff,
         emissiveIntensity: 1,
-        toneMapped: false // This ensures the sun always appears bright
+        toneMapped: false
     });
 
     const sunMesh = new THREE.Mesh(sunGeometry, sunMaterial);
-    sunMesh.position.set(50, 30, -50);
-    mainSkybox.add(sunMesh);
+    sunMesh.position.set(30, 30, -30); // Moved further away
+    scene.add(sunMesh); // Add to scene instead of skybox for correct rendering
 
     // Add a point light to simulate sun's light
-    const sunLight = new THREE.PointLight(0xffffff, 2.0, 0, 1);
+    const sunLight = new THREE.PointLight(0xffffff, 1.5, 1000, 1);
     sunLight.position.copy(sunMesh.position);
     scene.add(sunLight);
 
     // Add a subtle glow effect to the sun
-    const sunGlowGeometry = new THREE.SphereGeometry(5.5, 32, 32);
+    const sunGlowGeometry = new THREE.SphereGeometry(7, 64, 64);
     const sunGlowMaterial = new THREE.ShaderMaterial({
         uniforms: {
-            c: { type: "f", value: 0.1 },
-            p: { type: "f", value: 1.4 },
-            glowColor: { type: "c", value: new THREE.Color(0xffff00) },
+            c: { type: "f", value: 0.2 },
+            p: { type: "f", value: 1.8 },
+            glowColor: { type: "c", value: new THREE.Color(0xffddaa) },
             viewVector: { type: "v3", value: camera.position }
         },
         vertexShader: `
@@ -142,7 +141,7 @@ export function init() {
                 gl_FragColor = vec4( glow, 1.0 );
             }
         `,
-        side: THREE.BackSide,
+        side: THREE.FrontSide,
         blending: THREE.AdditiveBlending,
         transparent: true
     });
@@ -151,20 +150,58 @@ export function init() {
     sunGlow.position.copy(sunMesh.position);
     scene.add(sunGlow);
 
-    // Add subtle ambient light to simulate sky illumination
-    const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
-    scene.add(ambientLight);
-
+    // Update sun glow in animation loop
+    function updateSunGlow() {
+        sunGlow.material.uniforms.viewVector.value = new THREE.Vector3().subVectors(camera.position, sunGlow.position);
+    }
     // Set up postprocessing
     composer = new EffectComposer(renderer);
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
-    bloomPass = new UnrealBloomPass(new Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.15;
-    bloomPass.strength = 1.5;
-    bloomPass.radius = 1;
-    composer.addPass(bloomPass);
+    const customBloomShader = {
+        uniforms: {
+            "tDiffuse": { value: null },
+            "bloomStrength": { value: 1.0 },
+            "bloomRadius": { value: 0.5 }
+        },
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D tDiffuse;
+            uniform float bloomStrength;
+            uniform float bloomRadius;
+            varying vec2 vUv;
+    
+            void main() {
+                vec4 color = texture2D(tDiffuse, vUv);
+                vec3 bloomColor = vec3(0.0);
+                float total = 0.0;
+                
+                for (float i = -4.0; i <= 4.0; i++) {
+                    for (float j = -4.0; j <= 4.0; j++) {
+                        vec2 offset = vec2(i, j) * bloomRadius / vec2(textureSize(tDiffuse, 0));
+                        vec3 sampleColor = texture2D(tDiffuse, vUv + offset).rgb;
+                        float weight = 1.0 - length(vec2(i, j)) / 5.0;
+                        bloomColor += sampleColor * weight;
+                        total += weight;
+                    }
+                }
+                
+                bloomColor /= total;
+                gl_FragColor = vec4(color.rgb + bloomColor * bloomStrength, color.a);
+            }
+        `
+    };
+    
+    // Replace UnrealBloomPass with custom bloom shader
+    const customBloomPass = new ShaderPass(customBloomShader);
+    composer.addPass(customBloomPass);
 
     motionBlurPass = new ShaderPass({
         uniforms: {
@@ -261,6 +298,7 @@ export function init() {
     renderer.outputColorSpace = THREE.SRGBColorSpace; // Instead of outputEncoding
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
+    renderer.setClearColor(0x000000, 0);
 }
 
 function createWaterMaterial(landElevationTexture) {
@@ -597,8 +635,8 @@ function setupGUI(landMaterial) {
         motionBlurSamples: 64,
         motionBlurDecay: 1,
         brightness: 0,
-        contrast: 100,
-        saturation: 100
+        contrast: 1,
+        saturation: 1
     };
 
     postprocessingFolder.add(postprocessingParams, 'bloomEnabled').onChange(updatePostprocessing);
@@ -610,8 +648,8 @@ function setupGUI(landMaterial) {
     postprocessingFolder.add(postprocessingParams, 'motionBlurSamples', 1, 128).step(1).onChange(updatePostprocessing);
     postprocessingFolder.add(postprocessingParams, 'motionBlurDecay', 0, 1).onChange(updatePostprocessing);
     postprocessingFolder.add(postprocessingParams, 'brightness', -1, 1).onChange(updatePostprocessing);
-    postprocessingFolder.add(postprocessingParams, 'contrast', 0, 200).onChange(updatePostprocessing);
-    postprocessingFolder.add(postprocessingParams, 'saturation', 0, 200).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'contrast', 0, 2).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'saturation', 0, 2).onChange(updatePostprocessing);
 
     const bloomSmoothing = 0.8;
 
@@ -642,11 +680,16 @@ function setupGUI(landMaterial) {
                 adjustmentPass.uniforms.brightness.value = postprocessingParams.brightness;
             }
             if (adjustmentPass.uniforms.contrast) {
-                adjustmentPass.uniforms.contrast.value = postprocessingParams.contrast / 100;
+                adjustmentPass.uniforms.contrast.value = postprocessingParams.contrast;
             }
             if (adjustmentPass.uniforms.saturation) {
-                adjustmentPass.uniforms.saturation.value = postprocessingParams.saturation / 100;
+                adjustmentPass.uniforms.saturation.value = postprocessingParams.saturation;
             }
+        }
+
+        if (customBloomPass) {
+            customBloomPass.uniforms.bloomStrength.value = postprocessingParams.bloomStrength;
+            customBloomPass.uniforms.bloomRadius.value = postprocessingParams.bloomRadius;
         }
     }
 
@@ -666,6 +709,12 @@ export function animate(time) {
     requestAnimationFrame(animate);
 
     const t = time * 0.001; // Convert to seconds
+
+    // Update skybox if it has a custom shader
+    if (mainSkybox && mainSkybox.material.uniforms) {
+        mainSkybox.material.uniforms.time.value = t;
+    }
+
     // Calculate camera movement
     const currentPosition = camera.position.clone();
     const currentRotation = new Vector3().setFromEuler(camera.rotation);
