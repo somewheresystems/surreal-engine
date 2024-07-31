@@ -18,9 +18,14 @@ import { Vector3, Vector2 } from 'three';
 let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, envCamera, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass, adjustmentPass, customBloomPass;
 let previousCameraPosition = new Vector3();
 let previousCameraRotation = new Vector3();
-let frameCount = 0;
+let lastTime = 0;
+let sdxlTurboTexture;
+let sdxlPlane;
+let debugElement;
+let sdxlTurboPrompt = "Beautiful, cinematic photography shot of a planet in space";
+let gui;
 
-export function init() {
+export async function init() {
     scene = new THREE.Scene();
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.z = 3;
@@ -299,6 +304,132 @@ export function init() {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.setClearColor(0x000000, 0);
+
+    // Create a texture to hold the SDXL Turbo generated image
+    sdxlTurboTexture = new THREE.Texture();
+
+    // Create a plane to display the SDXL Turbo image
+    const sdxlPlaneGeometry = new THREE.PlaneGeometry(0.5, 0.5);
+    const sdxlPlaneMaterial = new THREE.MeshBasicMaterial({ map: sdxlTurboTexture, transparent: true, opacity: 1 });
+    sdxlPlane = new THREE.Mesh(sdxlPlaneGeometry, sdxlPlaneMaterial);
+    sdxlPlane.position.set(0.7, -0.7, -1); // Position in bottom-right corner
+    camera.add(sdxlPlane);
+    scene.add(camera);
+
+    // Create debug element
+    debugElement = document.createElement('div');
+    debugElement.style.position = 'absolute';
+    debugElement.style.top = '10px';
+    debugElement.style.left = '10px';
+    debugElement.style.color = 'white';
+    debugElement.style.fontFamily = 'Arial, sans-serif';
+    debugElement.style.fontSize = '14px';
+    debugElement.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+    debugElement.style.padding = '5px';
+    document.body.appendChild(debugElement);
+
+    // Add SDXL Turbo controls to GUI
+    const sdxlFolder = gui.addFolder('SDXL Turbo');
+    sdxlFolder.add({ prompt: sdxlTurboPrompt }, 'prompt').onChange(value => {
+        sdxlTurboPrompt = value;
+        generateSDXLTurboImage();
+    });
+    sdxlFolder.add({ generate: generateSDXLTurboImage }, 'generate');
+
+    // Generate initial image
+    generateSDXLTurboImage();
+}
+
+let isGeneratingImage = false;
+
+async function generateSDXLTurboImage() {
+    if (isGeneratingImage) return;
+    
+    try {
+        isGeneratingImage = true;
+        updateDebugInfo("Generating SDXL Turbo image...");
+        
+        const startTime = performance.now();
+
+        // Store original renderer size
+        const originalWidth = renderer.domElement.width;
+        const originalHeight = renderer.domElement.height;
+
+        // Set renderer to 1024x1024
+        renderer.setSize(1024, 1024);
+
+        // Adjust camera aspect ratio
+        camera.aspect = 1;
+        camera.updateProjectionMatrix();
+
+        // Render the scene
+        renderer.render(scene, camera);
+
+        // Capture the rendered image
+        const screenshot = renderer.domElement.toDataURL('image/jpeg', 1.0);
+
+        // Reset renderer and camera
+        renderer.setSize(originalWidth, originalHeight);
+        camera.aspect = originalWidth / originalHeight;
+        camera.updateProjectionMatrix();
+
+        // Display screenshot in debug panel
+        const debugPanel = document.getElementById('debugPanel');
+        debugPanel.innerHTML = `<img src="${screenshot}" style="width: 256px; height: 256px; object-fit: contain;">`;
+
+        // Convert screenshot to blob
+        const response = await fetch(screenshot);
+        const blob = await response.blob();
+
+        // Create FormData and append the image and prompt
+        const formData = new FormData();
+        formData.append('file', blob, 'screenshot.jpg');
+        formData.append('prompt', sdxlTurboPrompt);
+
+        // Make API call to our Python server
+        const serverResponse = await fetch('http://localhost:8000/process_frame', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!serverResponse.ok) {
+            throw new Error(`HTTP error! status: ${serverResponse.status}`);
+        }
+
+        const imageBlob = await serverResponse.blob();
+        const endTime = performance.now();
+
+        updateDebugInfo(`SDXL Turbo image generated in ${(endTime - startTime).toFixed(2)} ms`);
+
+        // Display the generated image
+        const img = new Image();
+        img.onload = function() {
+            const container = document.getElementById('sdxlTurboImage');
+            container.innerHTML = '';
+            container.appendChild(img);
+            isGeneratingImage = false;
+            setTimeout(generateSDXLTurboImage, 0);
+        };
+        img.onerror = function() {
+            console.error("Error loading generated image");
+            isGeneratingImage = false;
+            setTimeout(generateSDXLTurboImage, 1000);
+        };
+        img.src = URL.createObjectURL(imageBlob);
+    } catch (error) {
+        console.error("Error generating SDXL Turbo image:", error);
+        updateDebugInfo("Error generating SDXL Turbo image: " + error.message);
+        isGeneratingImage = false;
+        setTimeout(generateSDXLTurboImage, 1000);
+    }
+}
+
+function updateDebugInfo(message) {
+    if (debugElement) {
+        debugElement.textContent = message;
+    } else {
+        console.log("Debug info:", message);
+    }
 }
 
 function createWaterMaterial(landElevationTexture) {
@@ -489,7 +620,7 @@ function createAnimatedSkyboxMaterial(spaceNoiseTexture) {
 }
 
 function setupGUI(landMaterial) {
-    const gui = new dat.GUI();
+    gui = new dat.GUI();
     
     const landFolder = gui.addFolder('Land');
     
@@ -708,6 +839,9 @@ function onWindowResize() {
 export function animate(time) {
     requestAnimationFrame(animate);
 
+    const deltaTime = time - lastTime;
+    lastTime = time;
+
     const t = time * 0.001; // Convert to seconds
 
     // Update skybox if it has a custom shader
@@ -745,6 +879,11 @@ export function animate(time) {
 
     // Use composer to render the scene with post-processing
     composer.render();
+
+    // Update SDXL Turbo plane position to stay in bottom-right corner
+    if (sdxlPlane) {
+        sdxlPlane.position.set(0.7, -0.7, -1);
+    }
 }
 
 init();

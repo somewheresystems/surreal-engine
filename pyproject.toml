@@ -1,0 +1,24 @@
+[tool.poetry]
+name = "planetsim"
+version = "0.1.0"
+description = ""
+authors = ["Justin Bennington <justin@somewhere.systems>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+torch = "^2.4.0"
+numpy = "^2.0.1"
+fastapi = "^0.111.1"
+diffusers = "^0.29.2"
+pillow = "^10.4.0"
+opencv-python = "^4.10.0.84"
+requests = "^2.32.3"
+transformers = "^4.43.3"
+uvicorn = "^0.30.3"
+fastapi-cors = "^0.0.6"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
