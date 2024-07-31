@@ -15,7 +15,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Vector3, Vector2 } from 'three';
 
-let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass;
+let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass, adjustmentPass;
 let previousCameraPosition = new Vector3();
 let previousCameraRotation = new Vector3();
 let frameCount = 0;
@@ -29,14 +29,13 @@ export function init() {
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
-    // Create water sphere (outer)
-    const waterGeometry = new THREE.SphereGeometry(1, 512, 512);
+    const waterGeometry = new THREE.IcosahedronGeometry(1, 256); // The second parameter is the detail level
     waterMaterial = createWaterMaterial();
     waterSphere = new THREE.Mesh(waterGeometry, waterMaterial);
     scene.add(waterSphere);
 
     // Create land sphere (inner)
-    const landGeometry = new THREE.SphereGeometry(0.98, 512, 512);
+    const landGeometry = new THREE.IcosahedronGeometry(1, 256); // The second parameter is the detail level
     landMaterial = createLandMaterial();
     landSphere = new THREE.Mesh(landGeometry, landMaterial);
     scene.add(landSphere);
@@ -162,16 +161,18 @@ export function init() {
     composer.addPass(renderPass);
 
     bloomPass = new UnrealBloomPass(new Vector2(window.innerWidth, window.innerHeight), 1.5, 0.4, 0.85);
-    bloomPass.threshold = 0.21;
-    bloomPass.strength = 1.2;
-    bloomPass.radius = 0.55;
+    bloomPass.threshold = 0.15;
+    bloomPass.strength = 1.5;
+    bloomPass.radius = 1;
     composer.addPass(bloomPass);
 
-    const motionBlurShader = {
+    motionBlurPass = new ShaderPass({
         uniforms: {
             "tDiffuse": { value: null },
-            "velocityFactor": { value: 0.5 },
-            "delta": { value: new Vector2() }
+            "velocityFactor": { value: 0.13 },
+            "delta": { value: new Vector2() },
+            "samples": { value: 64 },
+            "decay": { value: 1 }
         },
         vertexShader: `
             varying vec2 vUv;
@@ -184,26 +185,66 @@ export function init() {
             uniform sampler2D tDiffuse;
             uniform float velocityFactor;
             uniform vec2 delta;
+            uniform int samples;
+            uniform float decay;
             varying vec2 vUv;
             void main() {
                 vec4 currentColor = texture2D(tDiffuse, vUv);
                 vec4 blurredColor = vec4(0.0);
                 float totalWeight = 0.0;
-                const int samples = 5;
                 for (int i = 0; i < samples; i++) {
-                    float weight = float(samples - i) / float(samples);
-                    vec2 offset = delta * velocityFactor * (float(i) / float(samples - 1) - 0.5) * 5;
+                    float weight = pow(decay, float(i));
+                    vec2 offset = delta * velocityFactor * (float(i) / float(samples - 1) - 0.5);
                     blurredColor += texture2D(tDiffuse, vUv + offset) * weight;
                     totalWeight += weight;
                 }
-                gl_FragColor = mix(currentColor, blurredColor / totalWeight, 0.5);
+                gl_FragColor = mix(currentColor, blurredColor / totalWeight, velocityFactor);
             }
         `
-    };
-
-    motionBlurPass = new ShaderPass(motionBlurShader);
-    motionBlurPass.renderToScreen = true;
+    });
     composer.addPass(motionBlurPass);
+
+    adjustmentPass = new ShaderPass({
+        uniforms: {
+            "tDiffuse": { value: null },
+            "brightness": { value: 0 },
+            "contrast": { value: 1 },
+            "saturation": { value: 1 }
+        },
+        vertexShader: `
+            varying vec2 vUv;
+            void main() {
+                vUv = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D tDiffuse;
+            uniform float brightness;
+            uniform float contrast;
+            uniform float saturation;
+            varying vec2 vUv;
+            void main() {
+                vec4 color = texture2D(tDiffuse, vUv);
+                
+                // Brightness
+                color.rgb += brightness;
+                
+                // Contrast
+                color.rgb = (color.rgb - 0.5) * contrast + 0.5;
+                
+                // Saturation
+                float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+                color.rgb = mix(vec3(luminance), color.rgb, saturation);
+                
+                gl_FragColor = clamp(color, 0.0, 1.0);
+            }
+        `
+    });
+    composer.addPass(adjustmentPass);
+
+    // Set the last pass to render to screen
+    motionBlurPass.renderToScreen = true;
 
     // Initialize previous positions
     previousCameraPosition.copy(camera.position);
@@ -266,9 +307,9 @@ function createWaterMaterial(landElevationTexture) {
 function createLandMaterial() {
     return new THREE.ShaderMaterial({
         uniforms: {
-            u_lowColor: { value: new THREE.Color(0x1a4d2e).multiplyScalar(1/255) },
-            u_midColor: { value: new THREE.Color(0x4a7c59).multiplyScalar(1/255) },
-            u_highColor: { value: new THREE.Color(0x9ef01a).multiplyScalar(1/255) },
+            u_lowColor: { value: new THREE.Color(0x000100).multiplyScalar(1/255) },
+            u_midColor: { value: new THREE.Color(0x010301).multiplyScalar(1/255) },
+            u_highColor: { value: new THREE.Color(0xffffff).multiplyScalar(1/255) },
             u_noiseScale: { value: 1.0 },
             u_noiseStrength: { value: 0.1 },
             u_roughness: { value: 0.7 },
@@ -548,11 +589,16 @@ function setupGUI(landMaterial) {
     const postprocessingFolder = gui.addFolder('Postprocessing');
     const postprocessingParams = {
         bloomEnabled: true,
-        bloomThreshold: 0.21,
-        bloomStrength: 1.2,
-        bloomRadius: 0.55,
+        bloomThreshold: 0.15,
+        bloomStrength: 1.5,
+        bloomRadius: 1,
         motionBlurEnabled: true,
-        motionBlurStrength: 0.1
+        motionBlurStrength: 0.13,
+        motionBlurSamples: 64,
+        motionBlurDecay: 1,
+        brightness: 0,
+        contrast: 100,
+        saturation: 100
     };
 
     postprocessingFolder.add(postprocessingParams, 'bloomEnabled').onChange(updatePostprocessing);
@@ -560,75 +606,66 @@ function setupGUI(landMaterial) {
     postprocessingFolder.add(postprocessingParams, 'bloomStrength', 0, 3).onChange(updatePostprocessing);
     postprocessingFolder.add(postprocessingParams, 'bloomRadius', 0, 1).onChange(updatePostprocessing);
     postprocessingFolder.add(postprocessingParams, 'motionBlurEnabled').onChange(updatePostprocessing);
-    postprocessingFolder.add(postprocessingParams, 'motionBlurStrength', 0, 1)
-        .name('Motion Blur Strength')
-        .onChange((value) => {
-            motionBlurPass.uniforms.velocityFactor.value = value;
-        });
+    postprocessingFolder.add(postprocessingParams, 'motionBlurStrength', 0, 1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'motionBlurSamples', 1, 128).step(1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'motionBlurDecay', 0, 1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'brightness', -1, 1).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'contrast', 0, 200).onChange(updatePostprocessing);
+    postprocessingFolder.add(postprocessingParams, 'saturation', 0, 200).onChange(updatePostprocessing);
+
+    const bloomSmoothing = 0.8;
 
     function updatePostprocessing() {
-        bloomPass.enabled = postprocessingParams.bloomEnabled;
-        bloomPass.threshold = postprocessingParams.bloomThreshold;
-        bloomPass.strength = postprocessingParams.bloomStrength;
-        bloomPass.radius = postprocessingParams.bloomRadius;
+        if (bloomPass) {
+            bloomPass.enabled = postprocessingParams.bloomEnabled;
+            // Smooth bloom values
+            bloomPass.threshold = THREE.MathUtils.lerp(bloomPass.threshold, postprocessingParams.bloomThreshold, 1 - bloomSmoothing);
+            bloomPass.strength = THREE.MathUtils.lerp(bloomPass.strength, postprocessingParams.bloomStrength, 1 - bloomSmoothing);
+            bloomPass.radius = THREE.MathUtils.lerp(bloomPass.radius, postprocessingParams.bloomRadius, 1 - bloomSmoothing);
+        }
         
-        motionBlurPass.enabled = postprocessingParams.motionBlurEnabled;
+        if (motionBlurPass && motionBlurPass.uniforms) {
+            motionBlurPass.enabled = postprocessingParams.motionBlurEnabled;
+            if (motionBlurPass.uniforms.velocityFactor) {
+                motionBlurPass.uniforms.velocityFactor.value = postprocessingParams.motionBlurStrength;
+            }
+            if (motionBlurPass.uniforms.samples) {
+                motionBlurPass.uniforms.samples.value = postprocessingParams.motionBlurSamples;
+            }
+            if (motionBlurPass.uniforms.decay) {
+                motionBlurPass.uniforms.decay.value = postprocessingParams.motionBlurDecay;
+            }
+        }
+        
+        if (adjustmentPass && adjustmentPass.uniforms) {
+            if (adjustmentPass.uniforms.brightness) {
+                adjustmentPass.uniforms.brightness.value = postprocessingParams.brightness;
+            }
+            if (adjustmentPass.uniforms.contrast) {
+                adjustmentPass.uniforms.contrast.value = postprocessingParams.contrast / 100;
+            }
+            if (adjustmentPass.uniforms.saturation) {
+                adjustmentPass.uniforms.saturation.value = postprocessingParams.saturation / 100;
+            }
+        }
     }
+
+    // Call updatePostprocessing initially to set the correct values
+    updatePostprocessing();
 }
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
-    waterMaterial.uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    waterMaterial.uniforms.u_resolution.value.set(window.innerWidth, window.innerHeight);
 }
 
 export function animate(time) {
     requestAnimationFrame(animate);
 
     const t = time * 0.001; // Convert to seconds
-
-    // Update skybox animation
-    if (envMap && envMap.isWebGLCubeRenderTarget && envScene) {
-        const envCamera = envMap.texture.camera;
-        if (envCamera) {
-            if (waterSphere) waterSphere.visible = false;
-            envScene.children.forEach(child => {
-                if (child.material && child.material.uniforms && child.material.uniforms.time) {
-                    child.material.uniforms.time.value = t;
-                }
-            });
-            envCamera.update(renderer, envScene);
-            if (waterSphere) waterSphere.visible = true;
-        }
-    }
-
-    // Update main scene skybox
-    if (scene) {
-        scene.children.forEach(child => {
-            if (child.material && child.material.uniforms && child.material.uniforms.time) {
-                child.material.uniforms.time.value = t;
-            }
-        });
-    }
-
-    // Update water sphere
-    if (waterSphere && waterSphere.material.uniforms && waterSphere.material.uniforms.u_time) {
-        waterSphere.material.uniforms.u_time.value = t;
-    }
-
-    // Rotate the water sphere
-    if (waterSphere) {
-        waterSphere.rotation.x += 0.001;
-        waterSphere.rotation.y += 0.002;
-    }
-
-    // Update controls if they exist
-    if (controls && typeof controls.update === 'function') {
-        controls.update();
-    }
-
     // Calculate camera movement
     const currentPosition = camera.position.clone();
     const currentRotation = new Vector3().setFromEuler(camera.rotation);
@@ -642,9 +679,6 @@ export function animate(time) {
         positionDelta.y + rotationDelta.x
     );
 
-    // Clamp the motion vector to prevent extreme blurring
-    motionVector.clampLength(0, 0.05);
-
     // Update motion blur uniforms
     motionBlurPass.uniforms.delta.value.copy(motionVector);
 
@@ -652,22 +686,16 @@ export function animate(time) {
     previousCameraPosition.copy(camera.position);
     previousCameraRotation.setFromEuler(camera.rotation);
 
-    // Slowly rotate the skybox
-    if (mainSkybox) {
-        mainSkybox.rotation.y = time * 0.00001;
+    // Update controls if they exist
+    if (controls) controls.update();
+
+    // Update uniforms
+    if (waterMaterial && waterMaterial.uniforms) {
+        waterMaterial.uniforms.u_time.value = t;
     }
 
-    // Render main scene
-    if (renderer && scene && camera) {
-        composer.render();
-    }
-
-    // Reset render target and clear artifacts
-    if (frameCount % 300 === 0) {  // Every 300 frames
-        renderer.setRenderTarget(null);
-        renderer.clear();
-        renderer.render(scene, camera);
-    }
+    // Use composer to render the scene with post-processing
+    composer.render();
 }
 
 init();
