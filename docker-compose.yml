@@ -1,4 +1,4 @@
-version: '3.9'
+version: '3.10'
 
 services:
   backend:
@@ -8,7 +8,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 64G
+          memory: 24G
     environment:
       - PYTHONUNBUFFERED=1
       - PYTHONDONTWRITEBYTECODE=1

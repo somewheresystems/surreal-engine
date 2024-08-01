@@ -32,6 +32,9 @@ Surreal Engine combines the power of Three.js and Stable Diffusion XL Turbo to c
    ```
    docker-compose up
    ```
+### Common Problems
+
+The backend uses a lot of memory (16GB+) so you'll need to ensure that Docker Desktop has enough allocated, as well as consider hacking CUDA support (maybe I'll work on this soon).
 
 ## Contributing
 We welcome contributions to Surreal Engine! Here's how you can help:
