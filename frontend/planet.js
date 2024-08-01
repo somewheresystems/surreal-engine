@@ -1,19 +1,27 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import * as dat from 'dat.gui';
-import snoiseShader from './snoise.glsl';
-import waterVertexShader from './waterVertexShader.glsl';
-import waterFragmentShader from './waterFragmentShader.glsl';
-import cloudShader from './cloudShader.glsl';
-import landVertexShader from './landVertexShader.glsl';
-import landFragmentShader from './landFragmentShader.glsl';
-import animatedSkyboxVert from './animatedSkyboxVert.glsl';
-import animatedSkyboxFrag from './animatedSkyboxFrag.glsl';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { Vector3, Vector2 } from 'three';
+// Shaders
+import snoiseShader from './shaders/utils/snoise.glsl';
+import waterShaderVert from './shaders/nature/waterShaderVert.glsl';
+import waterShaderFrag from './shaders/nature/waterShaderFrag.glsl';
+import cloudShaderVert from './shaders/nature/cloudShaderVert.glsl';
+import cloudShaderFrag from './shaders/nature/cloudShaderFrag.glsl';
+import landShaderVert from './shaders/nature/landShaderVert.glsl';
+import landShaderFrag from './shaders/nature/landShaderFrag.glsl';
+import animatedSkyboxVert from './shaders/skybox/animatedSkyboxVert.glsl';
+import animatedSkyboxFrag from './shaders/skybox/animatedSkyboxFrag.glsl';
+import simpleBloomVert from './shaders/postprocessing/simpleBloomVert.glsl';
+import simpleBloomFrag from './shaders/postprocessing/simpleBloomFrag.glsl';
+import motionBlurVert from './shaders/postprocessing/motionBlurVert.glsl';
+import motionBlurFrag from './shaders/postprocessing/motionBlurFrag.glsl';
+import sunGlowVert from './shaders/postprocessing/sunGlowVert.glsl';
+import sunGlowFrag from './shaders/postprocessing/sunGlowFrag.glsl';
 
 let scene, camera, renderer, waterMaterial, waterSphere, controls, cloudTexture, envMap, envScene, envCamera, mainSkybox, landSphere, landMaterial, composer, bloomPass, motionBlurPass, adjustmentPass, customBloomPass;
 let previousCameraPosition = new Vector3();
@@ -22,7 +30,7 @@ let lastTime = 0;
 let sdxlTurboTexture;
 let sdxlPlane;
 let debugElement;
-let sdxlTurboPrompt = "Beautiful, cinematic photography shot of a planet in space";
+let sdxlTurboPrompt = "space photography, hyperreality";
 let gui;
 
 export async function init() {
@@ -129,23 +137,8 @@ export async function init() {
             glowColor: { type: "c", value: new THREE.Color(0xffddaa) },
             viewVector: { type: "v3", value: camera.position }
         },
-        vertexShader: `
-            uniform vec3 viewVector;
-            varying float intensity;
-            void main() {
-                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
-                vec3 actual_normal = vec3(modelMatrix * vec4(normal, 0.0));
-                intensity = pow( dot(normalize(viewVector), actual_normal), 6.0 );
-            }
-        `,
-        fragmentShader: `
-            uniform vec3 glowColor;
-            varying float intensity;
-            void main() {
-                vec3 glow = glowColor * intensity;
-                gl_FragColor = vec4( glow, 1.0 );
-            }
-        `,
+        vertexShader: sunGlowVert,
+        fragmentShader: sunGlowFrag,
         side: THREE.FrontSide,
         blending: THREE.AdditiveBlending,
         transparent: true
@@ -164,44 +157,15 @@ export async function init() {
     const renderPass = new RenderPass(scene, camera);
     composer.addPass(renderPass);
 
+    
     const customBloomShader = {
         uniforms: {
             "tDiffuse": { value: null },
             "bloomStrength": { value: 1.0 },
             "bloomRadius": { value: 0.5 }
         },
-        vertexShader: `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-        `,
-        fragmentShader: `
-            uniform sampler2D tDiffuse;
-            uniform float bloomStrength;
-            uniform float bloomRadius;
-            varying vec2 vUv;
-    
-            void main() {
-                vec4 color = texture2D(tDiffuse, vUv);
-                vec3 bloomColor = vec3(0.0);
-                float total = 0.0;
-                
-                for (float i = -4.0; i <= 4.0; i++) {
-                    for (float j = -4.0; j <= 4.0; j++) {
-                        vec2 offset = vec2(i, j) * bloomRadius / vec2(textureSize(tDiffuse, 0));
-                        vec3 sampleColor = texture2D(tDiffuse, vUv + offset).rgb;
-                        float weight = 1.0 - length(vec2(i, j)) / 5.0;
-                        bloomColor += sampleColor * weight;
-                        total += weight;
-                    }
-                }
-                
-                bloomColor /= total;
-                gl_FragColor = vec4(color.rgb + bloomColor * bloomStrength, color.a);
-            }
-        `
+        vertexShader: simpleBloomVert,
+        fragmentShader: simpleBloomFrag
     };
     
     // Replace UnrealBloomPass with custom bloom shader
@@ -216,33 +180,8 @@ export async function init() {
             "samples": { value: 64 },
             "decay": { value: 1 }
         },
-        vertexShader: `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-        `,
-        fragmentShader: `
-            uniform sampler2D tDiffuse;
-            uniform float velocityFactor;
-            uniform vec2 delta;
-            uniform int samples;
-            uniform float decay;
-            varying vec2 vUv;
-            void main() {
-                vec4 currentColor = texture2D(tDiffuse, vUv);
-                vec4 blurredColor = vec4(0.0);
-                float totalWeight = 0.0;
-                for (int i = 0; i < samples; i++) {
-                    float weight = pow(decay, float(i));
-                    vec2 offset = delta * velocityFactor * (float(i) / float(samples - 1) - 0.5);
-                    blurredColor += texture2D(tDiffuse, vUv + offset) * weight;
-                    totalWeight += weight;
-                }
-                gl_FragColor = mix(currentColor, blurredColor / totalWeight, velocityFactor);
-            }
-        `
+        vertexShader: motionBlurVert,
+        fragmentShader: motionBlurFrag
     });
     composer.addPass(motionBlurPass);
 
@@ -254,33 +193,10 @@ export async function init() {
             "saturation": { value: 1 }
         },
         vertexShader: `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
+            
         `,
         fragmentShader: `
-            uniform sampler2D tDiffuse;
-            uniform float brightness;
-            uniform float contrast;
-            uniform float saturation;
-            varying vec2 vUv;
-            void main() {
-                vec4 color = texture2D(tDiffuse, vUv);
-                
-                // Brightness
-                color.rgb += brightness;
-                
-                // Contrast
-                color.rgb = (color.rgb - 0.5) * contrast + 0.5;
-                
-                // Saturation
-                float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
-                color.rgb = mix(vec3(luminance), color.rgb, saturation);
-                
-                gl_FragColor = clamp(color, 0.0, 1.0);
-            }
+            
         `
     });
     composer.addPass(adjustmentPass);
@@ -465,8 +381,8 @@ function createWaterMaterial(landElevationTexture) {
             prevProjectionMatrix: { value: new THREE.Matrix4() },
             prevCameraPosition: { value: new THREE.Vector3() }
         },
-        vertexShader: snoiseShader + '\n' + waterVertexShader,
-        fragmentShader: waterFragmentShader,
+        vertexShader: snoiseShader + '\n' + waterShaderVert,
+        fragmentShader: waterShaderFrag,
         transparent: true,
         opacity: 0.8,
         side: THREE.DoubleSide,
@@ -492,8 +408,8 @@ function createLandMaterial() {
             prevProjectionMatrix: { value: new THREE.Matrix4() },
             prevCameraPosition: { value: new THREE.Vector3() }
         },
-        vertexShader: landVertexShader,
-        fragmentShader: landFragmentShader,
+        vertexShader: landShaderVert,
+        fragmentShader: landShaderFrag,
     });
 }
 
@@ -506,14 +422,8 @@ function createCloudTexture(size = 512) {
             u_cloudSpeed: { value: 0.1 },
             iResolution: { value: new THREE.Vector2(size, size) }
         },
-        vertexShader: `
-            varying vec2 vUv;
-            void main() {
-                vUv = uv;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-        `,
-        fragmentShader: cloudShader
+        vertexShader: cloudShaderVert,
+        fragmentShader: cloudShaderFrag
     });
 
     const renderTarget = new THREE.WebGLRenderTarget(size, size, {
