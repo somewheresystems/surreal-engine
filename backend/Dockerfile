@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir poetry
 RUN poetry config virtualenvs.create false \
     && poetry install --no-interaction --no-ansi
 
-# Download Hugging Face models
-RUN python -c "from diffusers import AutoPipelineForText2Image; AutoPipelineForText2Image.from_pretrained('stabilityai/sdxl-turbo', torch_dtype='torch.float32', variant='fp16', use_safetensors=True)"
+# Download Huggingface models
+RUN python -c "from diffusers import AutoPipelineForText2Image; import torch; AutoPipelineForText2Image.from_pretrained('stabilityai/sdxl-turbo', torch_dtype=torch.float32, variant='fp16', use_safetensors=True)"
 
 # Make port 8000 available to the world outside this container
 EXPOSE 8000
