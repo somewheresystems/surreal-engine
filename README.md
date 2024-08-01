@@ -23,7 +23,20 @@ Surreal Engine combines the power of Three.js and Stable Diffusion XL Turbo to c
    cd surreal-engine
    ```
 
-### Running the Project
+### Running the SDXL Server with `poetry`
+1. Navigate to the Backend directory with `cd backend`
+2. `poetry shell`
+3. `poetry install`
+4. `python sdxl_turbo_server.py`
+
+### Running the Frontend with `npm`
+1. Navigate to the Frontend directory with `cd frontend`
+2. `npm install`
+3. `npm run build`
+4. `npm start`
+5. Access the frontend on http://localhost:8080.
+
+### Running the Project with `docker-compose`
 1. Build the project
    ```
    docker-compose build
@@ -32,9 +45,12 @@ Surreal Engine combines the power of Three.js and Stable Diffusion XL Turbo to c
    ```
    docker-compose up
    ```
+
 ### Common Problems
 
 The backend uses a lot of memory (16GB+) so you'll need to ensure that Docker Desktop has enough allocated, as well as consider hacking CUDA support (maybe I'll work on this soon).
+
+When you first build and run the program, it can take up to 10 minutes for the backend to download the SDXL model and dependencies. However, these will be cached for each subsequent run.
 
 ## Contributing
 We welcome contributions to Surreal Engine! Here's how you can help:
