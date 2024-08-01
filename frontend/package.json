@@ -14,7 +14,7 @@
     "webpack-dev-server": "^5.0.4"
   },
   "scripts": {
-    "start": "webpack serve --mode development",
+    "start": "webpack serve --mode development --host 0.0.0.0",
     "build": "webpack --mode production"
   }
 }

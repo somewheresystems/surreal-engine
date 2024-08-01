@@ -5,14 +5,23 @@ services:
     build: ./backend
     ports:
       - "8000:8000"
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+    environment:
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONMALLOC=malloc
+      - MALLOC_TRIM_THRESHOLD_=100000
 
   frontend:
     build: ./frontend
     ports:
       - "8080:8080"
-    depends_on:
-      backend:
-        condition: service_healthy
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
 
 networks:
   default:

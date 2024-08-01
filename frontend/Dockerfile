@@ -16,8 +16,7 @@ COPY . .
 # Build the app
 RUN npm run build
 
-# Install a simple server to serve static files
-RUN npm install -g serve
+RUN npm install -g webpack webpack-cli
 
 # Expose the port the app runs on
 EXPOSE 3000

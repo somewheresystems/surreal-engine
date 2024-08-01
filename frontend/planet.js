@@ -20,6 +20,8 @@ import simpleBloomVert from './shaders/postprocessing/simpleBloomVert.glsl';
 import simpleBloomFrag from './shaders/postprocessing/simpleBloomFrag.glsl';
 import motionBlurVert from './shaders/postprocessing/motionBlurVert.glsl';
 import motionBlurFrag from './shaders/postprocessing/motionBlurFrag.glsl';
+import adjustmentPassVert from './shaders/postprocessing/adjustmentPassVert.glsl';
+import adjustmentPassFrag from './shaders/postprocessing/adjustmentPassFrag.glsl';
 import sunGlowVert from './shaders/postprocessing/sunGlowVert.glsl';
 import sunGlowFrag from './shaders/postprocessing/sunGlowFrag.glsl';
 
@@ -192,12 +194,8 @@ export async function init() {
             "contrast": { value: 1 },
             "saturation": { value: 1 }
         },
-        vertexShader: `
-            
-        `,
-        fragmentShader: `
-            
-        `
+        vertexShader: adjustmentPassVert,
+        fragmentShader: adjustmentPassFrag
     });
     composer.addPass(adjustmentPass);
 

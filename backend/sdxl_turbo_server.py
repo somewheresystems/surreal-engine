@@ -23,21 +23,28 @@ app.add_middleware(
 
 # Load the SDXL Turbo pipeline
 pipe = None
-
 def load_pipeline():
     global pipe
     try:
+        print("Loading SDXL Turbo pipeline...")  # This will log to Docker
         pipe = AutoPipelineForImage2Image.from_pretrained("stabilityai/sdxl-turbo", torch_dtype=torch.float32)
         pipe.to("cpu")
+        print("Pipeline loaded successfully")  # This will log to Docker
         logger.info("Pipeline loaded successfully")
     except Exception as e:
-        logger.error(f"Failed to load pipeline: {str(e)}")
+        error_message = f"Failed to load pipeline: {str(e)}"
+        print(error_message)  # This will log to Docker
+        logger.error(error_message)
         raise
 
-load_pipeline()
+if pipe is None:
+    print("Initializing pipeline...")  # This will log to Docker
+    load_pipeline()
+    print("Pipeline initialization complete")  # This will log to Docker
 
 @app.post("/process_frame")
 async def process_frame(file: UploadFile = File(...), prompt: str = Form("Beautiful, cinematic photography shot of a planet in space")):
+    
     try:
         logger.info(f"Received prompt: {prompt}")
         logger.info(f"Received file: {file.filename}, Content-Type: {file.content_type}")
